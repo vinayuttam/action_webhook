@@ -7,12 +7,11 @@ gemspec
 
 gem "logger"
 gem "minitest", "~> 5.16"
-gem "rails", "~> 7.0"
 gem "rake", "~> 13.0"
 gem "rubocop", "~> 1.21"
 
 group :development, :test do
-  gem "yard"
+  gem "yard", "~> 0.9"
 end
 
 group :test do

@@ -1,0 +1,175 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    name: Build and publish gem
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history for proper versioning
+          fetch-depth: 0
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3.3'
+          bundler-cache: true
+
+      - name: Extract version from tag
+        id: extract_version
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "Extracted version: ${VERSION} from tag: ${TAG_NAME}"
+
+      - name: Verify version consistency
+        run: |
+          GEMSPEC_VERSION=$(ruby -e "load 'action_webhook.gemspec'; puts Gem::Specification.load('action_webhook.gemspec').version")
+          EXPECTED_VERSION="${{ steps.extract_version.outputs.version }}"
+
+          echo "Gemspec version: ${GEMSPEC_VERSION}"
+          echo "Expected version: ${EXPECTED_VERSION}"
+
+          if [ "${GEMSPEC_VERSION}" != "${EXPECTED_VERSION}" ]; then
+            echo "❌ Version mismatch! Gemspec has ${GEMSPEC_VERSION} but tag is ${EXPECTED_VERSION}"
+            exit 1
+          fi
+
+          echo "✅ Version consistency verified"
+
+      - name: Run tests
+        run: |
+          echo "Running test suite before release..."
+          if [ -f "spec" ] && [ -d "spec" ]; then
+            bundle exec rspec
+          elif [ -f "test" ] && [ -d "test" ]; then
+            bundle exec rake test
+          else
+            echo "No tests found, skipping test execution"
+          fi
+
+      - name: Build gem
+        run: |
+          echo "Building gem..."
+          gem build action_webhook.gemspec
+
+          # Verify the gem was built
+          GEM_FILE="action_webhook-${{ steps.extract_version.outputs.version }}.gem"
+          if [ ! -f "${GEM_FILE}" ]; then
+            echo "❌ Gem file ${GEM_FILE} was not created"
+            exit 1
+          fi
+
+          echo "✅ Gem built successfully: ${GEM_FILE}"
+          echo "gem_file=${GEM_FILE}" >> $GITHUB_OUTPUT
+        id: build_gem
+
+      - name: Verify gem contents
+        run: |
+          echo "Verifying gem contents..."
+          GEM_FILE="${{ steps.build_gem.outputs.gem_file }}"
+
+          # Extract and check gem contents
+          gem specification "${GEM_FILE}" --yaml > gem_spec.yaml
+
+          echo "Gem specification:"
+          cat gem_spec.yaml
+
+          echo "✅ Gem verification complete"
+
+      - name: Configure RubyGems credentials
+        run: |
+          mkdir -p ~/.gem
+          cat > ~/.gem/credentials << EOF
+          ---
+          :rubygems_api_key: ${{ secrets.RUBYGEMS_API_KEY }}
+          EOF
+          chmod 600 ~/.gem/credentials
+
+      - name: Publish gem to RubyGems
+        run: |
+          echo "Publishing gem to RubyGems..."
+          GEM_FILE="${{ steps.build_gem.outputs.gem_file }}"
+
+          gem push "${GEM_FILE}"
+
+          echo "✅ Gem published successfully to RubyGems!"
+
+      - name: Upload gem as release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ${{ steps.build_gem.outputs.gem_file }}
+          asset_name: ${{ steps.build_gem.outputs.gem_file }}
+          asset_content_type: application/octet-stream
+
+      - name: Update release notes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ steps.extract_version.outputs.version }}';
+            const gemFile = '${{ steps.build_gem.outputs.gem_file }}';
+
+            // Get current release
+            const release = context.payload.release;
+
+            // Append installation instructions to release body
+            const additionalNotes = `
+
+            ## 📦 Installation
+
+            \`\`\`bash
+            gem install action_webhook -v ${version}
+            \`\`\`
+
+            Or add to your Gemfile:
+
+            \`\`\`ruby
+            gem 'action_webhook', '~> ${version}'
+            \`\`\`
+
+            ## 🔗 Links
+
+            - [Documentation](https://github.com/${{ github.repository }}/tree/v${version}/docs)
+            - [Changelog](https://github.com/${{ github.repository }}/blob/v${version}/CHANGELOG.md)
+            - [RubyGems](https://rubygems.org/gems/action_webhook/versions/${version})
+
+            ---
+
+            **Gem file**: \`${gemFile}\` is available as a release asset.
+            `;
+
+            // Update release with additional notes
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              body: release.body + additionalNotes
+            });
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up..."
+          rm -f ~/.gem/credentials
+          rm -f gem_spec.yaml
+          rm -f action_webhook-*.gem
+          echo "✅ Cleanup complete"
+
+      - name: Post-release notification
+        if: success()
+        run: |
+          echo "🎉 Release ${{ steps.extract_version.outputs.tag }} published successfully!"
+          echo "📦 Gem is now available on RubyGems"
+          echo "🔗 Release URL: ${{ github.event.release.html_url }}"

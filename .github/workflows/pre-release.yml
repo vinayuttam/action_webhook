@@ -1,0 +1,130 @@
+name: Pre-release validation
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate release preparation
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - name: Extract version from tag
+        id: extract_version
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "Validating release for version: ${VERSION}"
+
+      - name: Run release validation script
+        run: |
+          if [ -f "scripts/prepare_release.rb" ]; then
+            echo "Running release preparation validation..."
+            ruby scripts/prepare_release.rb
+          else
+            echo "No release validation script found, performing basic checks..."
+          fi
+
+      - name: Verify version consistency
+        run: |
+          GEMSPEC_VERSION=$(ruby -e "load 'action_webhook.gemspec'; puts Gem::Specification.load('action_webhook.gemspec').version")
+          VERSION_FILE_VERSION=$(ruby -e "require './lib/action_webhook/version'; puts ActionWebhook::VERSION")
+          EXPECTED_VERSION="${{ steps.extract_version.outputs.version }}"
+
+          echo "Gemspec version: ${GEMSPEC_VERSION}"
+          echo "Version file version: ${VERSION_FILE_VERSION}"
+          echo "Tag version: ${EXPECTED_VERSION}"
+
+          if [ "${GEMSPEC_VERSION}" != "${EXPECTED_VERSION}" ] || [ "${VERSION_FILE_VERSION}" != "${EXPECTED_VERSION}" ]; then
+            echo "❌ Version mismatch detected!"
+            echo "  Gemspec: ${GEMSPEC_VERSION}"
+            echo "  Version file: ${VERSION_FILE_VERSION}"
+            echo "  Tag: ${EXPECTED_VERSION}"
+            exit 1
+          fi
+
+          echo "✅ All versions are consistent"
+
+      - name: Verify CHANGELOG
+        run: |
+          VERSION="${{ steps.extract_version.outputs.version }}"
+
+          if ! grep -q "## \[${VERSION}\]" CHANGELOG.md; then
+            echo "❌ CHANGELOG.md does not contain entry for version ${VERSION}"
+            exit 1
+          fi
+
+          echo "✅ CHANGELOG.md contains entry for version ${VERSION}"
+
+      - name: Run full test suite
+        run: |
+          echo "Running comprehensive test suite..."
+          if [ -d "spec" ]; then
+            bundle exec rspec
+          elif [ -d "test" ]; then
+            bundle exec rake test
+          else
+            bundle exec rake
+          fi
+
+      - name: Test gem build
+        run: |
+          echo "Testing gem build process..."
+          gem build action_webhook.gemspec
+
+          VERSION="${{ steps.extract_version.outputs.version }}"
+          GEM_FILE="action_webhook-${VERSION}.gem"
+
+          if [ ! -f "${GEM_FILE}" ]; then
+            echo "❌ Expected gem file ${GEM_FILE} was not created"
+            exit 1
+          fi
+
+          echo "✅ Gem built successfully: ${GEM_FILE}"
+
+      - name: Check documentation
+        run: |
+          echo "Checking documentation completeness..."
+
+          required_docs=(
+            "README.md"
+            "CHANGELOG.md"
+            "CONTRIBUTING.md"
+            "docs/README.md"
+            "docs/installation.md"
+            "docs/quick-start.md"
+          )
+
+          for doc in "${required_docs[@]}"; do
+            if [ ! -f "${doc}" ]; then
+              echo "❌ Missing required documentation: ${doc}"
+              exit 1
+            fi
+            echo "✅ Found: ${doc}"
+          done
+
+          echo "✅ All required documentation is present"
+
+      - name: Validate release readiness
+        run: |
+          echo "🎉 Release validation completed successfully!"
+          echo "Version ${{ steps.extract_version.outputs.version }} is ready for release"
+          echo ""
+          echo "To complete the release:"
+          echo "1. Create a GitHub release for tag ${{ steps.extract_version.outputs.tag }}"
+          echo "2. The release workflow will automatically publish to RubyGems"

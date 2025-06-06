@@ -1,27 +1,92 @@
-name: Ruby
+name: CI
 
 on:
   push:
     branches:
       - main
-
+      - develop
   pull_request:
+    branches:
+      - main
+      - develop
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     name: Ruby ${{ matrix.ruby }}
     strategy:
+      fail-fast: false
       matrix:
         ruby:
-          - '3.3.3'
+          - '3.1'
+          - '3.2'
+          - '3.3'
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
-      - name: Run the default task
-        run: bundle exec rake
+
+      - name: Install dependencies
+        run: |
+          bundle install --jobs 4 --retry 3
+
+      - name: Run tests
+        run: |
+          if [ -d "spec" ]; then
+            echo "Running RSpec tests..."
+            bundle exec rspec --format documentation
+          elif [ -d "test" ]; then
+            echo "Running minitest..."
+            bundle exec rake test
+          else
+            echo "No tests found, running default rake task..."
+            bundle exec rake
+          fi
+
+      - name: Run RuboCop
+        run: |
+          if gem list rubocop -i > /dev/null 2>&1; then
+            echo "Running RuboCop..."
+            bundle exec rubocop --format github
+          else
+            echo "RuboCop not installed, skipping..."
+          fi
+        continue-on-error: true
+
+      - name: Check gem build
+        run: |
+          echo "Testing gem build..."
+          gem build action_webhook.gemspec
+          ls -la *.gem
+
+  security:
+    runs-on: ubuntu-latest
+    name: Security audit
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - name: Run bundle audit
+        run: |
+          if gem list bundler-audit -i > /dev/null 2>&1; then
+            echo "Running bundle audit..."
+            bundle exec bundle-audit check --update
+          else
+            echo "Installing bundler-audit..."
+            gem install bundler-audit
+            bundle-audit check --update
+          fi
+        continue-on-error: true

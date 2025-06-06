@@ -10,20 +10,21 @@ Gem::Specification.new do |spec|
 
   spec.summary = "A gem for triggering webhooks similar to trigger emails on Rails"
   spec.description = "A Rails library for triggering webhooks. Inspired by ActionMailer from Rails"
-  spec.homepage = "https://github.com/vinayuttam/action_webhook.git"
+  spec.homepage = "https://github.com/vinayuttam/action_webhook"
   spec.required_ruby_version = ">= 3.1.0"
   spec.license = "MIT"
 
   spec.metadata["homepage_uri"] = spec.homepage
-  spec.metadata["source_code_uri"] = "https://github.com/vinayuttam/action_webhook.git"
-  spec.metadata["changelog_uri"] = "https://github.com/vinayuttam/action_webhook.git/blob/main/CHANGELOG.md"
+  spec.metadata["source_code_uri"] = "https://github.com/vinayuttam/action_webhook/tree/main"
+  spec.metadata["changelog_uri"] = "https://github.com/vinayuttam/action_webhook/blob/main/CHANGELOG.md"
 
   spec.files         = Dir["lib/**/*"]
   spec.require_paths = ["lib"]
 
-  # Uncomment to register a new dependency of your gem
+  # Core dependencies
   spec.add_dependency "httparty", "~> 0.18.1"
-  spec.add_dependency "rails", "~> 7"
+  spec.add_dependency "activejob", ">= 6.0", "< 8.0"
+  spec.add_dependency "globalid", "~> 1.0"
 
-  spec.add_development_dependency "yard"
+  spec.add_development_dependency "yard", "~> 0.9"
 end
