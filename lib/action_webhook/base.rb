@@ -1,5 +1,3 @@
-# frozen_string_literal: true
-
 module ActionWebhook
   # Base class for defining and delivering webhooks
   #
@@ -145,15 +143,15 @@ module ActionWebhook
       generate_json_from_template(@action_name, assigns)
     end
 
-    # Posts payload(s) to the given webhook endpoints
+    # Posts payload to the given webhook endpoints
     #
     # @param webhook_details [Array<Hash>] An array of hashes containing `url` and `headers`
-    # @param payloads [Array<Hash>] One payload for each webhook
+    # @param payload [Hash] The payload to send to all webhook endpoints
     # @return [Array<Hash>] Array of response objects with status and body
-    def post_webhook(webhook_details, payloads)
+    def post_webhook(webhook_details, payload)
       responses = []
 
-      webhook_details.each_with_index do |detail, idx|
+      webhook_details.each do |detail|
         # Ensure headers exists
         detail[:headers] ||= {}
 
@@ -168,7 +166,7 @@ module ActionWebhook
 
         response = HTTParty.post(
           detail[:url],
-          body: payloads[idx].to_json,
+          body: payload.to_json,
           headers: headers,
           timeout: 10 # Add reasonable timeout
         )
@@ -180,6 +178,13 @@ module ActionWebhook
           url: detail[:url],
           attempt: @attempts
         }
+
+        # Log success or failure
+        if response.success?
+          logger.info("Webhook delivered successfully: #{detail[:url]} (Status: #{response.code}, Attempt: #{@attempts})")
+        else
+          logger.warn("Webhook delivery failed with HTTP error: #{detail[:url]} (Status: #{response.code}, Attempt: #{@attempts})")
+        end
       rescue StandardError => e
         responses << {
           success: false,
@@ -187,7 +192,7 @@ module ActionWebhook
           url: detail[:url],
           attempt: @attempts
         }
-        logger.error("Webhook delivery failed: #{e.message} for URL: #{detail[:url]} (Attempt #{@attempts})")
+        logger.error("Webhook delivery failed: #{e.message} for URL: #{detail[:url]} (Attempt: #{@attempts})")
       end
 
       responses
@@ -237,10 +242,10 @@ module ActionWebhook
     # Process the webhook to generate and send the payload
     def process_webhook
       # Render the message
-      payloads = [build_payload]
+      payload = build_payload
 
       # Post the webhook
-      post_webhook(webhook_details, payloads)
+      post_webhook(webhook_details, payload)
     end
 
     # Schedule a retry with appropriate backoff delay
