@@ -81,12 +81,21 @@ module ActionWebhook
       @attempts += 1
       response = process_webhook
 
-      if response.all? { |r| r[:success] }
-        invoke_callback(self.class.after_deliver_callback, response)
-      elsif @attempts < self.class.max_retries
-        retry_with_backoff
-      else
-        invoke_callback(self.class.after_retries_exhausted_callback, response)
+      # Separate successful and failed responses
+      successful_responses = response.select { |r| r[:success] }
+      failed_responses = response.reject { |r| r[:success] }
+
+      # Invoke success callback for successful deliveries
+      invoke_callback(self.class.after_deliver_callback, successful_responses) if successful_responses.any?
+
+      # Handle failed responses
+      if failed_responses.any? && @attempts < self.class.max_retries
+        # Extract failed webhook details for retry
+        failed_webhook_details = failed_responses.map { |r| @webhook_details.find { |detail| detail[:url] == r[:url] } }.compact
+        retry_with_backoff(failed_webhook_details)
+      elsif failed_responses.any?
+        # All retries exhausted for failed URLs
+        invoke_callback(self.class.after_retries_exhausted_callback, failed_responses)
       end
 
       response
@@ -318,12 +327,18 @@ module ActionWebhook
       end
     end
 
-    def retry_with_backoff
+    def retry_with_backoff(failed_webhook_details = nil)
+      # Use failed webhook details if provided, otherwise retry all
+      retry_details = failed_webhook_details || @webhook_details
+
       delay = calculate_backoff_delay
-      logger.info("Scheduling webhook retry #{@attempts + 1}/#{self.class.max_retries} in #{delay} seconds")
+      logger.info("Scheduling webhook retry #{@attempts + 1}/#{self.class.max_retries} for #{retry_details.size} URLs in #{delay} seconds")
 
       job_class = resolve_job_class
       serialized_webhook = serialize
+
+      # Update the webhook details to only include failed URLs
+      serialized_webhook["webhook_details"] = retry_details
 
       enqueue_retry_job(job_class, serialized_webhook, delay)
     end

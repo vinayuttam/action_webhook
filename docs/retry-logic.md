@@ -6,218 +6,315 @@ ActionWebhook provides robust retry mechanisms to handle temporary failures when
 
 Webhook delivery can fail for various reasons - network issues, temporary service outages, or rate limiting. ActionWebhook's retry system helps ensure reliable delivery while avoiding overwhelming failing endpoints.
 
-## Default Retry Behavior
+**Key Feature**: ActionWebhook intelligently retries only the URLs that failed, not all URLs in a batch delivery. This means if you're sending to 5 endpoints and only 2 fail, only those 2 will be retried.
 
-ActionWebhook uses ActiveJob's retry mechanisms by default:
+## Built-in Retry Behavior
+
+ActionWebhook includes built-in retry logic that automatically handles failures:
 
 ```ruby
-class WebhookJob < ApplicationJob
-  queue_as :webhooks
+class UserWebhook < ActionWebhook::Base
+  # Built-in retry configuration (class-level settings)
+  self.max_retries = 3                    # Maximum retry attempts
+  self.retry_delay = 30.seconds           # Base delay between retries
+  self.retry_backoff = :exponential       # Backoff strategy (:exponential, :linear, or :fixed)
+  self.retry_jitter = 5.seconds           # Random jitter to prevent thundering herd
 
-  # Default: retry up to 3 times with exponential backoff
-  retry_on StandardError, wait: :exponentially_longer, attempts: 3
+  def created(user)
+    @user = user
+    endpoints = [
+      { url: 'https://api1.example.com/webhooks', headers: { 'Authorization' => 'Bearer token1' } },
+      { url: 'https://api2.example.com/webhooks', headers: { 'Authorization' => 'Bearer token2' } },
+      { url: 'https://api3.example.com/webhooks', headers: { 'Authorization' => 'Bearer token3' } }
+    ]
+    deliver(endpoints)
+  end
+end
 
-  def perform(webhook_data)
-    webhook = ActionWebhook::Base.new(webhook_data)
-    webhook.deliver_now
+# If api2.example.com fails but api1 and api3 succeed,
+# only api2.example.com will be retried
+UserWebhook.created(user).deliver_now
+```
+
+## Retry Configuration Options
+
+### Class-Level Configuration
+
+Configure retry behavior for all instances of a webhook class:
+
+```ruby
+class OrderWebhook < ActionWebhook::Base
+  # Maximum number of retry attempts (default: 3)
+  self.max_retries = 5
+
+  # Base delay between retries (default: 30.seconds)
+  self.retry_delay = 1.minute
+
+  # Backoff strategy (default: :exponential)
+  # Options: :exponential, :linear, :fixed
+  self.retry_backoff = :exponential
+
+  # Random jitter to prevent thundering herd (default: 5.seconds)
+  self.retry_jitter = 10.seconds
+
+  def created(order)
+    @order = order
+    endpoints = get_webhook_endpoints('order.created')
+    deliver(endpoints)
   end
 end
 ```
 
-## Custom Retry Configuration
+### Backoff Strategies
 
-### Basic Retry Settings
-
-Configure retry attempts and timing:
-
-```ruby
-class BasicRetryWebhook < ActionWebhook::Base
-  # Retry up to 5 times with fixed 30-second intervals
-  retry_on Net::TimeoutError, wait: 30.seconds, attempts: 5
-
-  # Different retry settings for different errors
-  retry_on Net::HTTPServerError, wait: :exponentially_longer, attempts: 3
-  retry_on Net::HTTPTooManyRequests, wait: 1.minute, attempts: 10
-end
-```
-
-### Advanced Retry Strategies
-
-#### Exponential Backoff
+#### Exponential Backoff (Default)
+Doubles the delay with each retry attempt:
 
 ```ruby
 class ExponentialBackoffWebhook < ActionWebhook::Base
-  retry_on StandardError,
-           wait: :exponentially_longer,
-           attempts: 5,
-           jitter: 0.15 # Add randomness to prevent thundering herd
+  self.retry_backoff = :exponential
+  self.retry_delay = 30.seconds
 
-  private
-
-  def deliver_with_retry
-    begin
-      deliver_now
-    rescue Net::HTTPServerError => error
-      # Custom exponential backoff calculation
-      wait_time = calculate_backoff_time(executions)
-      retry_job(wait: wait_time)
-    end
-  end
-
-  def calculate_backoff_time(attempt)
-    base_delay = 2 ** attempt # 2, 4, 8, 16, 32 seconds
-    jitter = rand(0.5..1.5) # Add randomness
-    [base_delay * jitter, 300].min # Cap at 5 minutes
-  end
+  # Retry delays: 30s, 60s, 120s, 240s, 480s...
 end
 ```
 
 #### Linear Backoff
+Increases delay by a fixed amount each time:
 
 ```ruby
 class LinearBackoffWebhook < ActionWebhook::Base
-  retry_on StandardError, attempts: 5 do |job, error|
-    # Linear backoff: 30s, 60s, 90s, 120s, 150s
-    wait_time = job.executions * 30.seconds
-    job.retry_job(wait: wait_time)
-  end
+  self.retry_backoff = :linear
+  self.retry_delay = 30.seconds
+
+  # Retry delays: 30s, 60s, 90s, 120s, 150s...
 end
 ```
 
-#### Custom Backoff Strategy
+#### Fixed Backoff
+Uses the same delay for all retry attempts:
 
 ```ruby
-class CustomBackoffWebhook < ActionWebhook::Base
-  retry_on StandardError, attempts: 10 do |job, error|
-    wait_time = case job.executions
-                when 1..2
-                  30.seconds # Quick retries first
-                when 3..5
-                  5.minutes # Medium delay
-                else
-                  30.minutes # Long delay for persistent failures
-                end
+class FixedBackoffWebhook < ActionWebhook::Base
+  self.retry_backoff = :fixed
+  self.retry_delay = 45.seconds
 
-    job.retry_job(wait: wait_time)
-  end
+  # Retry delays: 45s, 45s, 45s, 45s, 45s...
 end
 ```
 
-## Error-Specific Retry Logic
+## How Selective Retry Works
 
-Handle different types of errors with specific retry strategies:
+ActionWebhook's intelligent retry system only retries URLs that actually failed:
 
 ```ruby
-class ErrorSpecificRetryWebhook < ActionWebhook::Base
-  # Don't retry on client errors (4xx)
-  discard_on Net::HTTPClientError
+class NotificationWebhook < ActionWebhook::Base
+  self.max_retries = 3
 
-  # Quick retry for temporary network issues
-  retry_on Net::TimeoutError,
-           Net::ConnectTimeout,
-           wait: 10.seconds,
-           attempts: 3
+  def user_signed_up(user)
+    @user = user
+    endpoints = [
+      { url: 'https://analytics.example.com/webhook' },      # Service A
+      { url: 'https://email-service.example.com/webhook' },  # Service B
+      { url: 'https://crm.example.com/webhook' },            # Service C
+      { url: 'https://slack.example.com/webhook' }           # Service D
+    ]
+    deliver(endpoints)
+  end
+end
 
-  # Longer wait for server errors
-  retry_on Net::HTTPServerError,
-           wait: :exponentially_longer,
-           attempts: 5
+# Example scenario:
+webhook = NotificationWebhook.user_signed_up(user)
+response = webhook.deliver_now
 
-  # Special handling for rate limits
-  retry_on Net::HTTPTooManyRequests do |job, error|
-    # Extract rate limit reset time from response headers
-    reset_time = extract_rate_limit_reset(error.response)
-    wait_until = reset_time || 1.hour.from_now
-    job.retry_job(wait_until: wait_until)
+# If the response looks like this:
+# [
+#   { success: true, url: 'https://analytics.example.com/webhook', status: 200 },
+#   { success: false, url: 'https://email-service.example.com/webhook', status: 500 },
+#   { success: true, url: 'https://crm.example.com/webhook', status: 201 },
+#   { success: false, url: 'https://slack.example.com/webhook', status: 503 }
+# ]
+#
+# Only https://email-service.example.com/webhook and https://slack.example.com/webhook
+# will be retried. The successful deliveries to analytics and CRM services won't be repeated.
+```
+
+### Retry Process Flow
+
+1. **Initial Delivery**: All URLs are attempted
+2. **Response Analysis**: Successful and failed responses are separated
+3. **Success Callback**: Triggered immediately for successful deliveries
+4. **Selective Retry**: Only failed URLs are queued for retry
+5. **Backoff Calculation**: Delay is calculated based on attempt number
+6. **Background Retry**: Failed URLs are retried via ActiveJob
+7. **Exhaustion Handling**: After max retries, exhaustion callback is triggered
+
+```ruby
+class DetailedWebhook < ActionWebhook::Base
+  self.max_retries = 3
+
+  # Called immediately when any URLs succeed
+  after_deliver :handle_successful_deliveries
+
+  # Called when retries are exhausted for failed URLs
+  after_retries_exhausted :handle_permanent_failures
+
+  def created(resource)
+    @resource = resource
+    endpoints = get_endpoints_for_event('created')
+    deliver(endpoints)
   end
 
   private
 
-  def extract_rate_limit_reset(response)
-    return nil unless response
+  def handle_successful_deliveries(successful_responses)
+    successful_responses.each do |response|
+      Rails.logger.info "Webhook delivered successfully to #{response[:url]} (Status: #{response[:status]})"
+      # Mark endpoint as healthy in monitoring system
+      EndpointHealth.mark_success(response[:url])
+    end
+  end
 
-    reset_header = response['X-RateLimit-Reset'] || response['Retry-After']
-    return nil unless reset_header
-
-    # Handle Unix timestamp
-    if reset_header.match?(/^\d+$/)
-      Time.at(reset_header.to_i)
-    # Handle seconds from now
-    else
-      reset_header.to_i.seconds.from_now
+  def handle_permanent_failures(failed_responses)
+    failed_responses.each do |response|
+      Rails.logger.error "Webhook permanently failed for #{response[:url]} after #{response[:attempt]} attempts"
+      # Disable endpoint or alert administrators
+      EndpointHealth.mark_failed(response[:url])
+      AlertService.webhook_failure(response)
     end
   end
 end
 ```
 
-## Conditional Retry Logic
+## Monitoring Retry Behavior
 
-Implement complex retry logic based on conditions:
+Track and monitor retry attempts:
 
 ```ruby
-class ConditionalRetryWebhook < ActionWebhook::Base
-  def perform
-    deliver_now
-  rescue => error
-    if should_retry?(error)
-      handle_retry(error)
-    else
-      handle_permanent_failure(error)
-    end
+class MonitoredWebhook < ActionWebhook::Base
+  self.max_retries = 5
+
+  after_deliver :track_successful_deliveries
+  after_retries_exhausted :track_permanent_failures
+
+  def send_notification(data)
+    @data = data
+    endpoints = WebhookEndpoint.active.pluck(:url, :headers)
+    deliver(endpoints)
   end
 
   private
 
-  def should_retry?(error)
-    return false if executions >= max_attempts
-    return false if permanent_error?(error)
-    return false if endpoint_disabled?
+  def track_successful_deliveries(successful_responses)
+    successful_responses.each do |response|
+      StatsD.increment('webhook.delivery.success', tags: {
+        webhook_class: self.class.name,
+        endpoint: response[:url],
+        attempt: response[:attempt]
+      })
 
-    true
-  end
-
-  def permanent_error?(error)
-    case error
-    when Net::HTTPUnauthorized, Net::HTTPForbidden
-      true
-    when Net::HTTPNotFound
-      # Maybe the endpoint was removed
-      true
-    when Net::HTTPClientError
-      # Most 4xx errors shouldn't be retried
-      true
-    else
-      false
+      # Track response time if available
+      if response[:response_time]
+        StatsD.histogram('webhook.delivery.response_time', response[:response_time])
+      end
     end
   end
 
-  def endpoint_disabled?
-    # Check if endpoint has been disabled due to too many failures
-    Rails.cache.read("webhook_disabled:#{endpoint_url}").present?
+  def track_permanent_failures(failed_responses)
+    failed_responses.each do |response|
+      StatsD.increment('webhook.delivery.permanent_failure', tags: {
+        webhook_class: self.class.name,
+        endpoint: response[:url],
+        final_attempt: response[:attempt],
+        error_type: response[:error] ? 'exception' : 'http_error'
+      })
+
+      # Alert on permanent failures
+      if response[:attempt] >= self.class.max_retries
+        SlackNotifier.webhook_failed_permanently(response)
+      end
+    end
+  end
+end
+```
+
+### Custom Retry Logic
+
+For advanced use cases, you can override the retry behavior:
+
+```ruby
+class CustomRetryWebhook < ActionWebhook::Base
+  # Override to implement custom retry logic
+  def deliver_now
+    @attempts += 1
+    response = process_webhook
+
+    successful_responses = response.select { |r| r[:success] }
+    failed_responses = response.reject { |r| r[:success] }
+
+    # Handle successful deliveries
+    if successful_responses.any?
+      invoke_callback(self.class.after_deliver_callback, successful_responses)
+    end
+
+    # Custom retry logic for failed responses
+    if failed_responses.any? && should_retry?
+      failed_webhook_details = extract_failed_webhook_details(failed_responses)
+
+      # Custom retry conditions
+      retryable_failures = failed_webhook_details.select { |detail| retryable_endpoint?(detail[:url]) }
+
+      if retryable_failures.any?
+        custom_retry_with_backoff(retryable_failures)
+      end
+
+      # Handle non-retryable failures immediately
+      non_retryable = failed_webhook_details - retryable_failures
+      if non_retryable.any?
+        non_retryable_responses = failed_responses.select { |r| non_retryable.any? { |detail| detail[:url] == r[:url] } }
+        invoke_callback(self.class.after_retries_exhausted_callback, non_retryable_responses)
+      end
+    elsif failed_responses.any?
+      # All retries exhausted
+      invoke_callback(self.class.after_retries_exhausted_callback, failed_responses)
+    end
+
+    response
   end
 
-  def handle_retry(error)
-    wait_time = calculate_retry_delay(error)
-    retry_job(wait: wait_time)
+  private
+
+  def should_retry?
+    @attempts < self.class.max_retries
   end
 
-  def calculate_retry_delay(error)
-    base_delay = case error
-                when Net::HTTPTooManyRequests
-                  1.hour
-                when Net::HTTPServerError
-                  [30.seconds * (2 ** executions), 30.minutes].min
-                else
-                  30.seconds
-                end
-
-    # Add jitter to prevent thundering herd
-    jitter = rand(0.8..1.2)
-    base_delay * jitter
+  def retryable_endpoint?(url)
+    # Custom logic to determine if endpoint should be retried
+    # e.g., check if endpoint is temporarily disabled
+    !Rails.cache.read("endpoint_disabled:#{url}")
   end
 
-  def max_attempts
-    5
+  def custom_retry_with_backoff(failed_webhook_details)
+    # Custom backoff calculation
+    delay = calculate_custom_delay
+
+    # Schedule retry job
+    job_class = resolve_job_class
+    serialized_webhook = serialize
+    serialized_webhook["webhook_details"] = failed_webhook_details
+
+    job_class.set(wait: delay).perform_later("deliver_now", serialized_webhook)
+  end
+
+  def calculate_custom_delay
+    # Example: Different delays based on time of day
+    base_delay = self.class.retry_delay
+
+    if Time.current.hour.between?(9, 17) # Business hours
+      base_delay
+    else
+      base_delay * 2 # Longer delays outside business hours
+    end
   end
 end
 ```
@@ -432,45 +529,133 @@ end
 Test your retry configurations:
 
 ```ruby
-# spec/webhooks/retry_webhook_spec.rb
-RSpec.describe RetryWebhook do
-  let(:webhook) { described_class.new(user_data) }
+# spec/webhooks/user_webhook_spec.rb
+RSpec.describe UserWebhook do
+  let(:webhook) { described_class.new }
+  let(:endpoints) do
+    [
+      { url: 'https://success.example.com/webhook' },
+      { url: 'https://failure.example.com/webhook' }
+    ]
+  end
 
-  describe 'retry behavior' do
-    it 'retries on server errors' do
-      allow(webhook).to receive(:deliver_now).and_raise(Net::HTTPServerError)
+  before do
+    webhook.instance_variable_set(:@user, create(:user))
+    webhook.instance_variable_set(:@webhook_details, endpoints)
+    webhook.instance_variable_set(:@action_name, :created)
+  end
 
-      expect(webhook).to receive(:retry_job).with(wait: anything)
+  describe 'selective retry behavior' do
+    it 'only retries failed URLs' do
+      # Mock HTTP responses
+      allow(HTTParty).to receive(:post).with('https://success.example.com/webhook', any_args)
+                                      .and_return(double(success?: true, code: 200, body: '{}'))
 
-      webhook.perform
+      allow(HTTParty).to receive(:post).with('https://failure.example.com/webhook', any_args)
+                                      .and_return(double(success?: false, code: 500, body: 'Server Error'))
+
+      # Mock job enqueuing for retry
+      allow(ActionWebhook::DeliveryJob).to receive(:set).and_return(ActionWebhook::DeliveryJob)
+      expect(ActionWebhook::DeliveryJob).to receive(:perform_later) do |method, serialized_webhook|
+        expect(method).to eq('deliver_now')
+        expect(serialized_webhook['webhook_details'].size).to eq(1)
+        expect(serialized_webhook['webhook_details'].first[:url]).to eq('https://failure.example.com/webhook')
+      end
+
+      response = webhook.deliver_now
+
+      expect(response.size).to eq(2)
+      expect(response.count { |r| r[:success] }).to eq(1)
+      expect(response.count { |r| !r[:success] }).to eq(1)
     end
 
-    it 'does not retry on client errors' do
-      allow(webhook).to receive(:deliver_now).and_raise(Net::HTTPUnauthorized)
+    it 'calls success callback for successful deliveries' do
+      expect(webhook).to receive(:invoke_callback) do |callback, responses|
+        expect(responses.size).to eq(1)
+        expect(responses.first[:success]).to be true
+        expect(responses.first[:url]).to eq('https://success.example.com/webhook')
+      end
 
-      expect(webhook).not_to receive(:retry_job)
-      expect { webhook.perform }.to raise_error(Net::HTTPUnauthorized)
+      allow(HTTParty).to receive(:post).with('https://success.example.com/webhook', any_args)
+                                      .and_return(double(success?: true, code: 200, body: '{}'))
+
+      allow(HTTParty).to receive(:post).with('https://failure.example.com/webhook', any_args)
+                                      .and_return(double(success?: false, code: 500, body: 'Server Error'))
+
+      webhook.deliver_now
     end
 
-    it 'respects maximum retry attempts' do
-      allow(webhook).to receive(:executions).and_return(5)
-      allow(webhook).to receive(:deliver_now).and_raise(Net::HTTPServerError)
+    it 'exhausts retries only for failed URLs' do
+      webhook.instance_variable_set(:@attempts, 3) # Max retries reached
 
-      expect(webhook).not_to receive(:retry_job)
-      expect { webhook.perform }.to raise_error(Net::HTTPServerError)
+      allow(HTTParty).to receive(:post).and_return(double(success?: false, code: 500, body: 'Server Error'))
+
+      expect(webhook).to receive(:invoke_callback).with(described_class.after_retries_exhausted_callback, anything) do |callback, responses|
+        expect(responses.size).to eq(2) # Both URLs failed
+        expect(responses.all? { |r| !r[:success] }).to be true
+      end
+
+      webhook.deliver_now
     end
   end
 
   describe 'backoff calculation' do
-    it 'increases wait time exponentially' do
-      expect(webhook.send(:calculate_backoff_time, 1)).to be_within(1).of(2)
-      expect(webhook.send(:calculate_backoff_time, 2)).to be_within(2).of(4)
-      expect(webhook.send(:calculate_backoff_time, 3)).to be_within(4).of(8)
+    let(:webhook_with_config) do
+      Class.new(ActionWebhook::Base) do
+        self.retry_delay = 10.seconds
+        self.retry_backoff = :exponential
+        self.retry_jitter = 2.seconds
+      end.new
     end
 
-    it 'caps maximum wait time' do
-      long_wait = webhook.send(:calculate_backoff_time, 10)
-      expect(long_wait).to be <= 300 # 5 minutes max
+    it 'calculates exponential backoff correctly' do
+      webhook_with_config.instance_variable_set(:@attempts, 1)
+      delay = webhook_with_config.send(:calculate_backoff_delay)
+      expect(delay).to be_between(8, 14) # 10s + jitter (8-12s range)
+
+      webhook_with_config.instance_variable_set(:@attempts, 2)
+      delay = webhook_with_config.send(:calculate_backoff_delay)
+      expect(delay).to be_between(18, 24) # 20s + jitter (18-22s range)
+    end
+
+    it 'calculates linear backoff correctly' do
+      webhook_class = Class.new(ActionWebhook::Base) do
+        self.retry_delay = 10.seconds
+        self.retry_backoff = :linear
+        self.retry_jitter = 2.seconds
+      end
+
+      webhook_linear = webhook_class.new
+      webhook_linear.instance_variable_set(:@attempts, 2)
+      delay = webhook_linear.send(:calculate_backoff_delay)
+      expect(delay).to be_between(18, 24) # (10s * 2) + jitter
+    end
+
+    it 'calculates fixed backoff correctly' do
+      webhook_class = Class.new(ActionWebhook::Base) do
+        self.retry_delay = 15.seconds
+        self.retry_backoff = :fixed
+        self.retry_jitter = 3.seconds
+      end
+
+      webhook_fixed = webhook_class.new
+      webhook_fixed.instance_variable_set(:@attempts, 5)
+      delay = webhook_fixed.send(:calculate_backoff_delay)
+      expect(delay).to be_between(12, 21) # 15s + jitter (12-18s range)
+    end
+  end
+
+  describe 'configuration' do
+    it 'respects class-level retry settings' do
+      webhook_class = Class.new(ActionWebhook::Base) do
+        self.max_retries = 5
+        self.retry_delay = 1.minute
+        self.retry_backoff = :linear
+      end
+
+      expect(webhook_class.max_retries).to eq(5)
+      expect(webhook_class.retry_delay).to eq(1.minute)
+      expect(webhook_class.retry_backoff).to eq(:linear)
     end
   end
 end
@@ -478,33 +663,224 @@ end
 
 ## Configuration Options
 
-Configure retry behavior globally:
+Configure retry behavior globally or per webhook class:
 
 ```ruby
 # config/initializers/action_webhook.rb
 ActionWebhook.configure do |config|
-  config.default_retry_attempts = 3
-  config.default_retry_wait = :exponentially_longer
-  config.retry_jitter = 0.15
-  config.max_retry_delay = 30.minutes
-  config.circuit_breaker_enabled = true
-  config.circuit_breaker_threshold = 5
-  config.circuit_breaker_timeout = 10.minutes
+  # These would be global defaults if implemented
+  # Currently, configuration is done at the class level
+end
+
+# Per-class configuration (current approach)
+class GlobalRetryWebhook < ActionWebhook::Base
+  # Set defaults for all webhook classes that inherit from this
+  self.max_retries = 5
+  self.retry_delay = 1.minute
+  self.retry_backoff = :exponential
+  self.retry_jitter = 10.seconds
+end
+
+class UserWebhook < GlobalRetryWebhook
+  # Inherits retry configuration from GlobalRetryWebhook
+  # Can override specific settings if needed
+  self.max_retries = 3 # Override just this setting
+end
+
+class CriticalWebhook < ActionWebhook::Base
+  # More aggressive retry for critical webhooks
+  self.max_retries = 10
+  self.retry_delay = 10.seconds
+  self.retry_backoff = :exponential
+  self.retry_jitter = 5.seconds
+end
+```
+
+## Advanced Use Cases
+
+### Conditional Retry Based on Response
+
+```ruby
+class SmartRetryWebhook < ActionWebhook::Base
+  def deliver_now
+    @attempts += 1
+    response = process_webhook
+
+    successful_responses = response.select { |r| r[:success] }
+    failed_responses = response.reject { |r| r[:success] }
+
+    # Handle successes immediately
+    invoke_callback(self.class.after_deliver_callback, successful_responses) if successful_responses.any?
+
+    # Smart retry logic for failures
+    if failed_responses.any? && @attempts < self.class.max_retries
+      retryable_failures = failed_responses.select { |r| retryable_error?(r) }
+
+      if retryable_failures.any?
+        failed_webhook_details = retryable_failures.map { |r|
+          @webhook_details.find { |detail| detail[:url] == r[:url] }
+        }.compact
+        retry_with_backoff(failed_webhook_details)
+      end
+
+      # Handle non-retryable failures as permanent
+      non_retryable = failed_responses - retryable_failures
+      invoke_callback(self.class.after_retries_exhausted_callback, non_retryable) if non_retryable.any?
+    elsif failed_responses.any?
+      invoke_callback(self.class.after_retries_exhausted_callback, failed_responses)
+    end
+
+    response
+  end
+
+  private
+
+  def retryable_error?(response)
+    # Don't retry 4xx client errors (except 408, 409, 429)
+    if response[:status]
+      case response[:status]
+      when 400..499
+        [408, 409, 429].include?(response[:status])
+      when 500..599
+        true # Retry all 5xx server errors
+      else
+        false
+      end
+    else
+      # Retry network errors (when status is nil but error is present)
+      response[:error].present?
+    end
+  end
+end
+```
+
+### Circuit Breaker Integration
+
+```ruby
+class CircuitBreakerWebhook < ActionWebhook::Base
+  def post_webhook(webhook_details, payload)
+    responses = []
+
+    webhook_details.each do |detail|
+      if circuit_open?(detail[:url])
+        responses << {
+          success: false,
+          status: nil,
+          error: "Circuit breaker open for #{detail[:url]}",
+          url: detail[:url],
+          attempt: @attempts
+        }
+        next
+      end
+
+      detail[:headers] ||= {}
+      headers = build_headers(detail[:headers])
+
+      begin
+        response = send_webhook_request(detail[:url], payload, headers)
+        responses << build_response_hash(response, detail[:url])
+        log_webhook_result(response, detail[:url])
+
+        # Record success for circuit breaker
+        record_success(detail[:url]) if response.success?
+      rescue StandardError => e
+        responses << build_error_response_hash(e, detail[:url])
+        log_webhook_error(e, detail[:url])
+
+        # Record failure for circuit breaker
+        record_failure(detail[:url])
+      end
+    end
+
+    responses
+  end
+
+  private
+
+  def circuit_open?(url)
+    failure_count = Rails.cache.read("circuit_failures:#{url}") || 0
+    failure_count >= 5
+  end
+
+  def record_success(url)
+    Rails.cache.delete("circuit_failures:#{url}")
+  end
+
+  def record_failure(url)
+    Rails.cache.increment("circuit_failures:#{url}", 1, expires_in: 1.hour)
+
+    # Open circuit if too many failures
+    if Rails.cache.read("circuit_failures:#{url}") >= 5
+      Rails.cache.write("circuit_open:#{url}", true, expires_in: 10.minutes)
+    end
+  end
 end
 ```
 
 ## Best Practices
 
-1. **Use appropriate retry strategies** - Exponential backoff for most cases
-2. **Don't retry client errors** - 4xx errors usually indicate permanent issues
-3. **Respect rate limits** - Parse rate limit headers and wait appropriately
-4. **Implement circuit breakers** - Prevent overwhelming failing endpoints
-5. **Monitor retry metrics** - Track retry rates and failure patterns
-6. **Set reasonable limits** - Don't retry indefinitely
-7. **Handle dead letters** - Have a plan for permanently failed webhooks
-8. **Add jitter** - Prevent thundering herd problems
-9. **Test retry logic** - Ensure your retry behavior works as expected
-10. **Alert on patterns** - Monitor for systematic failures
+1. **Use selective retry** - ActionWebhook automatically retries only failed URLs, maximizing efficiency
+2. **Configure appropriate retry limits** - Balance reliability with resource usage
+3. **Choose the right backoff strategy** - Exponential for most cases, linear for predictable loads, fixed for consistent timing
+4. **Add jitter** - Prevents thundering herd problems when multiple webhooks retry simultaneously
+5. **Monitor retry patterns** - Track which endpoints fail frequently to identify issues
+6. **Handle permanent failures** - Use the `after_retries_exhausted` callback to handle URLs that never succeed
+7. **Implement circuit breakers** - Prevent overwhelming consistently failing endpoints
+8. **Use appropriate timeouts** - Don't let slow endpoints block retries for fast ones
+9. **Test retry behavior** - Ensure your retry configuration works as expected under various failure scenarios
+10. **Consider rate limits** - Some APIs have rate limits that affect retry timing
+
+### Example Production Configuration
+
+```ruby
+class ProductionWebhook < ActionWebhook::Base
+  # Conservative retry settings for production
+  self.max_retries = 3
+  self.retry_delay = 30.seconds
+  self.retry_backoff = :exponential
+  self.retry_jitter = 10.seconds
+
+  # Callbacks for monitoring and alerting
+  after_deliver :log_successful_deliveries
+  after_retries_exhausted :handle_permanent_failures
+
+  private
+
+  def log_successful_deliveries(successful_responses)
+    successful_responses.each do |response|
+      Rails.logger.info "Webhook delivered: #{response[:url]} (#{response[:status]}) attempt #{response[:attempt]}"
+    end
+  end
+
+  def handle_permanent_failures(failed_responses)
+    failed_responses.each do |response|
+      Rails.logger.error "Webhook permanently failed: #{response[:url]} after #{response[:attempt]} attempts"
+
+      # Alert operations team
+      ErrorTracker.notify(
+        "Webhook delivery failed permanently",
+        extra: {
+          url: response[:url],
+          attempts: response[:attempt],
+          last_error: response[:error] || "HTTP #{response[:status]}"
+        }
+      )
+
+      # Optionally disable the endpoint
+      WebhookEndpoint.find_by(url: response[:url])&.mark_as_failing!
+    end
+  end
+end
+```
+
+## Key Benefits of ActionWebhook's Retry System
+
+- **Efficiency**: Only failed URLs are retried, not successful ones
+- **Reliability**: Automatic retry with configurable backoff strategies
+- **Observability**: Built-in callbacks for monitoring success and failure
+- **Flexibility**: Customizable retry logic for advanced use cases
+- **Performance**: Background processing via ActiveJob prevents blocking
+- **Resilience**: Jitter prevents thundering herd problems
 
 ## See Also
 

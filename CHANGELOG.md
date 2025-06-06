@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2025-06-06
+
+### 🚀 Enhanced Retry Logic
+
+- **Selective Retry**: Only retry URLs that actually failed, not all URLs in a batch delivery
+- **Intelligent Response Handling**: Separate successful and failed responses for more efficient processing
+- **Targeted Callbacks**: `after_deliver` callback now triggers immediately for successful deliveries
+- **Improved Logging**: More detailed retry logging showing exact number of URLs being retried
+
+### 🔧 Technical Improvements
+
+- Enhanced `deliver_now` method to handle partial failures intelligently
+- Updated `retry_with_backoff` to accept specific failed webhook details
+- Improved serialization to only include failed URLs in retry jobs
+- Better separation of concerns between success and failure handling
+
+### 📊 Benefits
+
+- **Efficiency**: Reduces unnecessary retry attempts for successful deliveries
+- **Performance**: Lower resource usage by avoiding redundant network calls
+- **Reliability**: More accurate callback invocation for monitoring and alerting
+- **Observability**: Better insights into which specific endpoints are failing
+
 ## [1.0.0] - 2025-06-06
 
 ### 🎉 First Stable Release

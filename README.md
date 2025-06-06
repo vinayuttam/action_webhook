@@ -11,12 +11,12 @@
 
 - **🎯 ActionMailer-inspired API** - Familiar patterns for Rails developers
 - **📄 ERB Template Support** - Dynamic JSON payloads with embedded Ruby
-- **🔄 Built-in Retry Logic** - Configurable retry strategies with exponential backoff
+- **🔄 Smart Retry Logic** - Only retries failed URLs, not successful ones
 - **⚡ ActiveJob Integration** - Queue webhooks using your existing job infrastructure
 - **🎣 Flexible Callbacks** - Hook into delivery lifecycle events
 - **🛡️ Error Handling** - Comprehensive error handling and logging
 - **🧪 Test-Friendly** - Built-in testing utilities and helpers
-- **📊 Multiple Endpoints** - Send to multiple URLs simultaneously
+- **📊 Multiple Endpoints** - Send to multiple URLs simultaneously with selective retry
 - **🔧 Highly Configurable** - Fine-tune behavior per webhook class
 - **📝 Comprehensive Logging** - Detailed logging for debugging and monitoring
 
@@ -95,27 +95,42 @@ UserWebhook.user_created(user: @user).deliver_later(queue: 'webhooks')
 
 ### Retry Configuration
 
+ActionWebhook intelligently retries only the URLs that fail, not all URLs in a batch:
+
 ```ruby
 class PaymentWebhook < ActionWebhook::Base
   # Configure retry behavior
   self.max_retries = 5
   self.retry_delay = 30.seconds
-  self.backoff_multiplier = 2.0
+  self.retry_backoff = :exponential  # :exponential, :linear, or :fixed
+  self.retry_jitter = 5.seconds      # Adds randomness to prevent thundering herd
 
   def payment_completed
-    # webhook logic
+    @payment = params[:payment]
+
+    endpoints = [
+      { url: 'https://accounting.example.com/webhooks' },
+      { url: 'https://analytics.example.com/webhooks' },
+      { url: 'https://notifications.example.com/webhooks' }
+    ]
+
+    deliver(endpoints)
+    # If only analytics.example.com fails, only that URL will be retried
   end
 end
 ```
 
-### Callbacks and Hooks
+### Smart Callbacks
+
+Get notified about successful deliveries immediately and permanent failures after retries are exhausted:
 
 ```ruby
 class OrderWebhook < ActionWebhook::Base
-  # Lifecycle callbacks
-  before_deliver :validate_payload
-  after_deliver :log_success
-  after_retries_exhausted :notify_admin
+  # Called immediately when any URLs succeed
+  after_deliver :handle_successful_deliveries
+
+  # Called when retries are exhausted for failed URLs
+  after_retries_exhausted :handle_permanent_failures
 
   def order_created
     @order = params[:order]
@@ -124,21 +139,24 @@ class OrderWebhook < ActionWebhook::Base
 
   private
 
-  def validate_payload
-    raise 'Invalid order' unless @order.valid?
+  def handle_successful_deliveries(successful_responses)
+    successful_responses.each do |response|
+      Rails.logger.info "Webhook delivered to #{response[:url]} (#{response[:status]})"
+    end
   end
 
-  def log_success(response)
-    Rails.logger.info "Webhook delivered successfully for order #{@order.id}"
-  end
-
-  def notify_admin(response)
-    AdminMailer.webhook_failure(@order.id, response).deliver_later
+  def handle_permanent_failures(failed_responses)
+    failed_responses.each do |response|
+      Rails.logger.error "Webhook permanently failed for #{response[:url]} after #{response[:attempt]} attempts"
+      AdminMailer.webhook_failure(@order.id, response).deliver_later
+    end
   end
 end
 ```
 
-### Multiple Endpoints
+### Multiple Endpoints with Selective Retry
+
+Send to multiple endpoints efficiently with intelligent retry logic:
 
 ```ruby
 class NotificationWebhook < ActionWebhook::Base
@@ -161,6 +179,69 @@ class NotificationWebhook < ActionWebhook::Base
     ]
 
     deliver(endpoints)
+    # If marketing.example.com fails but others succeed,
+    # only marketing.example.com will be retried
+  end
+end
+```
+
+### Real-world Example: E-commerce Order Processing
+
+```ruby
+class OrderWebhook < ActionWebhook::Base
+  self.max_retries = 3
+  self.retry_delay = 30.seconds
+  self.retry_backoff = :exponential
+
+  after_deliver :log_successful_integrations
+  after_retries_exhausted :handle_integration_failures
+
+  def order_placed
+    @order = params[:order]
+
+    endpoints = [
+      { url: 'https://inventory.company.com/webhooks' },      # Update inventory
+      { url: 'https://shipping.company.com/api/orders' },     # Create shipping label
+      { url: 'https://analytics.company.com/events' },       # Track conversion
+      { url: 'https://email.company.com/order-confirmation' }, # Send confirmation
+      { url: 'https://accounting.company.com/webhooks' }     # Update books
+    ]
+
+    deliver(endpoints)
+  end
+
+  private
+
+  def log_successful_integrations(responses)
+    responses.each do |response|
+      OrderIntegration.create!(
+        order: @order,
+        service_url: response[:url],
+        status: 'success',
+        http_status: response[:status],
+        attempt: response[:attempt]
+      )
+    end
+  end
+
+  def handle_integration_failures(responses)
+    responses.each do |response|
+      OrderIntegration.create!(
+        order: @order,
+        service_url: response[:url],
+        status: 'failed',
+        error_message: response[:error],
+        final_attempt: response[:attempt]
+      )
+
+      # Alert based on criticality
+      case response[:url]
+      when /inventory|accounting/
+        CriticalAlert.webhook_failure(@order, response)
+      else
+        StandardAlert.webhook_failure(@order, response)
+      end
+    end
   end
 end
 ```
