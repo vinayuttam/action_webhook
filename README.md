@@ -246,6 +246,57 @@ class OrderWebhook < ActionWebhook::Base
 end
 ```
 
+## 🔗 Header Formats
+
+ActionWebhook supports two different header formats to accommodate various storage and usage patterns:
+
+### Hash Format (Standard)
+
+The traditional approach where headers are provided as a simple hash:
+
+```ruby
+endpoints = [
+  {
+    url: 'https://api.example.com/webhooks',
+    headers: {
+      'Authorization' => 'Bearer token123',
+      'Content-Type' => 'application/json',
+      'X-Custom-Header' => 'custom-value'
+    }
+  }
+]
+```
+
+### Array Format (Database-Friendly)
+
+Useful when storing headers in databases where you need structured data with separate key and value fields:
+
+```ruby
+endpoints = [
+  {
+    url: 'https://api.example.com/webhooks',
+    headers: [
+      { 'key' => 'Authorization', 'value' => 'Bearer token123' },
+      { 'key' => 'Content-Type', 'value' => 'application/json' },
+      { 'key' => 'X-Custom-Header', 'value' => 'custom-value' }
+    ]
+  }
+]
+```
+
+### Symbol Keys Support
+
+Both string and symbol keys are supported in the array format:
+
+```ruby
+headers: [
+  { key: 'Authorization', value: 'Bearer token123' },
+  { key: 'Content-Type', value: 'application/json' }
+]
+```
+
+This flexibility makes it easy to integrate with various data storage patterns, whether you're storing headers as JSON in a database column or using a separate headers table with key/value pairs.
+
 ## 🧪 Testing
 
 ActionWebhook provides testing utilities to make webhook testing straightforward:

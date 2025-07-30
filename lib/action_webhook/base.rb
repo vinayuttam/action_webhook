@@ -4,6 +4,10 @@ module ActionWebhook
   # Subclass this and define webhook methods (e.g. `created`, `updated`) that
   # define instance variables and call deliver to send webhooks.
   #
+  # Headers can be provided in two formats:
+  # 1. Hash format: { 'Authorization' => 'Bearer token', 'Content-Type' => 'application/json' }
+  # 2. Array format: [{ 'key' => 'Authorization', 'value' => 'Bearer token' }, { 'key' => 'Content-Type', 'value' => 'application/json' }]
+  #
   # Example:
   #
   #   class UserWebhook < ActionWebhook::Base
@@ -41,10 +45,26 @@ module ActionWebhook
   #
   #     def created(user)
   #       @user = user
-  #       endpoints = WebhookSubscription.where(event: 'user.created').map do |sub|
-  #         { url: sub.url, headers: { 'Authorization' => "Bearer #{sub.token}" } }
+  #       # Headers can be provided as a hash
+  #       endpoints_with_hash_headers = WebhookSubscription.where(event: 'user.created').map do |sub|
+  #         {
+  #           url: sub.url,
+  #           headers: { 'Authorization' => "Bearer #{sub.token}", 'X-Custom-Header' => 'value' }
+  #         }
   #       end
-  #       deliver(endpoints)
+  #
+  #       # Or headers can be provided as an array of key/value objects (useful for database storage)
+  #       endpoints_with_array_headers = WebhookSubscription.where(event: 'user.created').map do |sub|
+  #         {
+  #           url: sub.url,
+  #           headers: [
+  #             { 'key' => 'Authorization', 'value' => "Bearer #{sub.token}" },
+  #             { 'key' => 'X-Custom-Header', 'value' => 'value' }
+  #           ]
+  #         }
+  #       end
+  #
+  #       deliver(endpoints_with_hash_headers)
   #     end
   #   end
   #
@@ -234,8 +254,51 @@ module ActionWebhook
       assigns
     end
 
+    # Builds HTTP headers for webhook requests
+    #
+    # Supports two input formats:
+    # 1. Hash format: { 'Authorization' => 'Bearer token', 'Content-Type' => 'application/json' }
+    # 2. Array format: [{ 'key' => 'Authorization', 'value' => 'Bearer token' }, { 'key' => 'Content-Type', 'value' => 'application/json' }]
+    #
+    # The array format is useful when storing headers in databases where you need
+    # structured data with separate key and value fields.
+    #
+    # @param detail_headers [Hash, Array, nil] Headers in hash or array format
+    # @return [Hash] Formatted headers hash ready for HTTP request
     def build_headers(detail_headers)
-      headers = default_headers.merge(detail_headers)
+      # Handle both hash format and array format with key/value objects
+      processed_headers = case detail_headers
+                          when Array
+                            # Transform array of header hashes [{'key': 'value'}] into a single hash
+                            detail_headers.each_with_object({}) do |header_item, acc|
+                              next unless header_item.is_a?(Hash)
+
+                              # Handle string keys
+                              if header_item.key?('key') && header_item.key?('value')
+                                key = header_item['key']
+                                value = header_item['value']
+                                acc[key.to_s] = value.to_s if key && value
+                              # Handle symbol keys
+                              elsif header_item.key?(:key) && header_item.key?(:value)
+                                key = header_item[:key]
+                                value = header_item[:value]
+                                acc[key.to_s] = value.to_s if key && value
+                              else
+                                # Log warning for malformed header items
+                                logger&.warn("Skipping malformed header item: #{header_item.inspect}")
+                              end
+                            end
+                          when Hash
+                            # Ensure all keys and values are strings for consistency
+                            detail_headers.transform_keys(&:to_s).transform_values(&:to_s)
+                          when NilClass
+                            {}
+                          else
+                            logger&.warn("Unknown header format: #{detail_headers.class}. Expected Hash or Array.")
+                            {}
+                          end
+
+      headers = default_headers.merge(processed_headers)
       headers["Content-Type"] = "application/json" unless headers.key?("Content-Type")
       headers["X-Webhook-Attempt"] = @attempts.to_s if @attempts.positive?
       headers

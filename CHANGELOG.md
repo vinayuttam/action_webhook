@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔗 Enhanced Header Support
+
+- **Multiple Header Formats**: Added support for array-based header format alongside existing hash format
+- **Database-Friendly Headers**: Headers can now be provided as `[{'key' => 'name', 'value' => 'value'}]` format
+- **Flexible Key Types**: Support for both string and symbol keys in array format (`key`/`:key`, `value`/`:value`)
+- **Backward Compatibility**: Existing hash-based headers continue to work without changes
+- **Auto-Detection**: Automatic detection and transformation of header formats in `build_headers` method
+- **Robust Error Handling**: Graceful handling of malformed data with logging and fallbacks
+- **Type Safety**: Automatic conversion of keys and values to strings for HTTP consistency
+- **Comprehensive Testing**: Extensive test coverage for edge cases and reliability
+
+### 🛡️ Reliability Improvements
+
+- **Null Safety**: Handles `nil` keys/values gracefully without errors
+- **Malformed Data Handling**: Skips invalid header items with warning logs
+- **Type Validation**: Validates input types and provides helpful error messages
+- **Consistent Output**: Ensures all headers are properly formatted for HTTP requests
+
+### 📚 Documentation Updates
+
+- Added comprehensive header format documentation to README
+- Updated inline code documentation with detailed examples
+- Enhanced class-level documentation with usage patterns
+
 ## [1.1.0] - 2025-06-06
 
 ### 🚀 Enhanced Retry Logic
