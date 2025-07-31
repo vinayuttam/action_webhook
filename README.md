@@ -154,6 +154,44 @@ class OrderWebhook < ActionWebhook::Base
 end
 ```
 
+### Debug Configuration
+
+Enable detailed logging of headers and request information for debugging:
+
+```ruby
+class MyWebhook < ActionWebhook::Base
+  self.debug_headers = true  # Enable header debugging
+
+  def user_created
+    @user = params[:user]
+    endpoints = [
+      {
+        url: 'https://api.example.com/webhooks',
+        headers: [
+          { 'key' => 'Authorization', 'value' => 'Bearer token123' },
+          { 'key' => 'X-Custom-Header', 'value' => 'debug-mode' }
+        ]
+      }
+    ]
+    deliver(endpoints)
+  end
+end
+```
+
+When `debug_headers` is enabled, you'll see detailed logs like:
+
+```
+ActionWebhook Headers Debug:
+  Default headers: {}
+  Processed headers: {"Authorization"=>"Bearer token123", "X-Custom-Header"=>"debug-mode"}
+  Final headers: {"Authorization"=>"Bearer token123", "X-Custom-Header"=>"debug-mode", "Content-Type"=>"application/json"}
+
+ActionWebhook Request Debug:
+  URL: https://api.example.com/webhooks
+  Headers: {"Authorization"=>"Bearer token123", "X-Custom-Header"=>"debug-mode", "Content-Type"=>"application/json"}
+  Payload size: 156 bytes
+```
+
 ### Multiple Endpoints with Selective Retry
 
 Send to multiple endpoints efficiently with intelligent retry logic:

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 🔍 Debug Features
+
+- **Header Debugging**: Added `debug_headers` class attribute to enable detailed header logging
+- **Request Debugging**: Debug mode logs URL, headers, and payload size for each request
+- **Development Aid**: Helps troubleshoot header processing and request formatting issues
+
+### 📚 Documentation Updates
+
+- Added debug configuration documentation and examples to README
+- Updated class-level documentation with debug mode usage
+
 ## [1.2.0] - 30 July 2025
 
 ### 🔗 Enhanced Header Support

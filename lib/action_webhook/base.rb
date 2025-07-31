@@ -8,6 +8,11 @@ module ActionWebhook
   # 1. Hash format: { 'Authorization' => 'Bearer token', 'Content-Type' => 'application/json' }
   # 2. Array format: [{ 'key' => 'Authorization', 'value' => 'Bearer token' }, { 'key' => 'Content-Type', 'value' => 'application/json' }]
   #
+  # Debug mode can be enabled to log header processing and request details:
+  #   class MyWebhook < ActionWebhook::Base
+  #     self.debug_headers = true
+  #   end
+  #
   # Example:
   #
   #   class UserWebhook < ActionWebhook::Base
@@ -42,6 +47,7 @@ module ActionWebhook
   #
   #   class UserWebhook < ActionWebhook::Base
   #     self.deliver_later_queue_name = 'webhooks'
+  #     self.debug_headers = true  # Enable header debugging
   #
   #     def created(user)
   #       @user = user
@@ -78,6 +84,9 @@ module ActionWebhook
     class_attribute :default_headers, instance_writer: false, default: {}
     class_attribute :delivery_method, instance_writer: false, default: :deliver_now
     class_attribute :perform_deliveries, instance_writer: false, default: true
+
+    # Debug configuration
+    class_attribute :debug_headers, instance_writer: false, default: false
 
     # Retry configuration
     class_attribute :max_retries, instance_writer: false, default: 3
@@ -301,10 +310,26 @@ module ActionWebhook
       headers = default_headers.merge(processed_headers)
       headers["Content-Type"] = "application/json" unless headers.key?("Content-Type")
       headers["X-Webhook-Attempt"] = @attempts.to_s if @attempts.positive?
+
+      # Debug headers if enabled
+      if self.class.debug_headers
+        logger&.info("ActionWebhook Headers Debug:")
+        logger&.info("  Default headers: #{default_headers}")
+        logger&.info("  Processed headers: #{processed_headers}")
+        logger&.info("  Final headers: #{headers}")
+      end
+
       headers
     end
 
     def send_webhook_request(url, payload, headers)
+      if self.class.debug_headers
+        logger&.info("ActionWebhook Request Debug:")
+        logger&.info("  URL: #{url}")
+        logger&.info("  Headers: #{headers}")
+        logger&.info("  Payload size: #{payload.to_json.bytesize} bytes")
+      end
+
       HTTParty.post(url, body: payload.to_json, headers: headers, timeout: 10)
     end
 
