@@ -4,17 +4,17 @@
 # Release preparation script for ActionWebhook
 # This script performs pre-release checks and preparations
 
-require 'fileutils'
-require 'date'
+require "fileutils"
+require "date"
 
 class ReleasePreparation
-  VERSION_FILE = 'lib/action_webhook/version.rb'
-  CHANGELOG_FILE = 'CHANGELOG.md'
-  GEMSPEC_FILE = 'action_webhook.gemspec'
+  VERSION_FILE = "lib/action_webhook/version.rb"
+  CHANGELOG_FILE = "CHANGELOG.md"
+  GEMSPEC_FILE = "action_webhook.gemspec"
 
   def initialize
     @version = extract_version
-    @release_date = Date.today.strftime('%Y-%m-%d')
+    @release_date = Date.today.strftime("%Y-%m-%d")
   end
 
   def run
@@ -43,7 +43,7 @@ class ReleasePreparation
   def extract_version
     content = File.read(VERSION_FILE)
     content.match(/VERSION = "(.+)"/)[1]
-  rescue => e
+  rescue StandardError => e
     abort "❌ Error reading version: #{e.message}"
   end
 
@@ -60,41 +60,41 @@ class ReleasePreparation
   end
 
   def check_git_status
-    unless system('git diff-index --quiet HEAD --')
-      puts "⚠️  Warning: You have uncommitted changes"
-    end
+    return if system("git diff-index --quiet HEAD --")
+
+    puts "⚠️  Warning: You have uncommitted changes"
   end
 
   def check_version_consistency
     gemspec_content = File.read(GEMSPEC_FILE)
-    unless gemspec_content.include?("ActionWebhook::VERSION")
-      abort "❌ Gemspec doesn't use ActionWebhook::VERSION"
-    end
+    return if gemspec_content.include?("ActionWebhook::VERSION")
+
+    abort "❌ Gemspec doesn't use ActionWebhook::VERSION"
   end
 
   def check_required_files
     required_files = [
-      'README.md',
-      'CHANGELOG.md',
-      'CONTRIBUTING.md',
-      'lib/action_webhook.rb',
-      'lib/action_webhook/base.rb',
-      'lib/action_webhook/delivery_job.rb',
-      'docs/README.md'
+      "README.md",
+      "CHANGELOG.md",
+      "CONTRIBUTING.md",
+      "lib/action_webhook.rb",
+      "lib/action_webhook/base.rb",
+      "lib/action_webhook/delivery_job.rb",
+      "docs/README.md"
     ]
 
     missing_files = required_files.reject { |file| File.exist?(file) }
 
-    if missing_files.any?
-      abort "❌ Missing required files: #{missing_files.join(', ')}"
-    end
+    return unless missing_files.any?
+
+    abort "❌ Missing required files: #{missing_files.join(", ")}"
   end
 
   def check_documentation
-    docs_dir = 'docs'
-    unless Dir.exist?(docs_dir) && Dir.entries(docs_dir).size > 2
-      abort "❌ Documentation directory is missing or empty"
-    end
+    docs_dir = "docs"
+    return if Dir.exist?(docs_dir) && Dir.entries(docs_dir).size > 2
+
+    abort "❌ Documentation directory is missing or empty"
   end
 
   def update_changelog_date

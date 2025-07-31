@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module ActionWebhook
   # Base class for defining and delivering webhooks
   #
@@ -120,7 +122,11 @@ module ActionWebhook
       # Handle failed responses
       if failed_responses.any? && @attempts < self.class.max_retries
         # Extract failed webhook details for retry
-        failed_webhook_details = failed_responses.map { |r| @webhook_details.find { |detail| detail[:url] == r[:url] } }.compact
+        failed_webhook_details = failed_responses.map do |r|
+          @webhook_details.find do |detail|
+            detail[:url] == r[:url]
+          end
+        end.compact
         retry_with_backoff(failed_webhook_details)
       elsif failed_responses.any?
         # All retries exhausted for failed URLs
@@ -283,9 +289,9 @@ module ActionWebhook
                               next unless header_item.is_a?(Hash)
 
                               # Handle string keys
-                              if header_item.key?('key') && header_item.key?('value')
-                                key = header_item['key']
-                                value = header_item['value']
+                              if header_item.key?("key") && header_item.key?("value")
+                                key = header_item["key"]
+                                value = header_item["value"]
                                 acc[key.to_s] = value.to_s if key && value
                               # Handle symbol keys
                               elsif header_item.key?(:key) && header_item.key?(:value)
